@@ -1,5 +1,6 @@
 {
   "outputDirectory": "dist",
-  "buildCommand": "npm run build:video",
+  "buildCommand": "cd ../.. && npm run build:video",
+  "installCommand": "cd ../.. && npm ci",
   "framework": "vite"
 }

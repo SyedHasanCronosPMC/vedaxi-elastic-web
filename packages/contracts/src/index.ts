@@ -10,3 +10,5 @@ export type {
   WebMcpTool,
   WebMcpUiStatus
 } from "./webmcp";
+
+export { requestVideoEvidence, installVideoEvidenceResponder } from "./evidence-bridge";

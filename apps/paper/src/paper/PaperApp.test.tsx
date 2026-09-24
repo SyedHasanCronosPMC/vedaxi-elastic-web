@@ -153,7 +153,7 @@ describe("M4 Focused Review", () => {
     const markup = renderStage(initialPublisherState);
 
     expect(markup).toContain("Run deterministic focus preview");
-    expect(markup).toContain("Simulated invocation — calls the same evidence service the WebMCP tools expose");
+    expect(markup).toContain("Guided cross-origin review · reads publisher evidence services");
     expect(markup).toContain("Focused Review");
     expect(markup).toContain('<iframe class="video-publisher" hidden=""');
     expect(markup).toContain("Checking whether the independent Video publisher is available");
@@ -462,9 +462,9 @@ describe("M4 Focused Review", () => {
     );
 
     expect(activeMarkup).toContain("Exposed WebMCP Tools (2)");
-    expect(activeMarkup).toContain("paper.search_evidence");
-    expect(activeMarkup).toContain("paper.propose_focus");
-    expect(activeMarkup).toContain("Simulate Agent Invocation");
+    expect(activeMarkup).toContain("search_paper_evidence");
+    expect(activeMarkup).toContain("request_discrepancy_focus");
+    expect(activeMarkup).toContain("Run local service diagnostic");
 
     const disabledMarkup = renderToStaticMarkup(
       <PaperApp
