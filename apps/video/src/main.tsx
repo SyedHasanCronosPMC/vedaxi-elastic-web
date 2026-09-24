@@ -1,3 +1,5 @@
+import { useEffect } from "react";
+import { installVideoEvidenceResponder } from "@vedaxi/contracts";
 import { createRoot } from "react-dom/client";
 import { createVideoEvidenceService, createVideoFixture, createVideoSearchTool, createVideoTranscriptTool, resolveConfiguredPaperOrigin, resolveVideoRuntimeConfig } from "./video";
 import { VideoApp } from "./video/VideoApp";
@@ -23,7 +25,10 @@ if (runtimeError) {
   root.innerHTML = `<main role="alert"><h1>Video origin unavailable</h1><p>${runtimeError}. Transcript tools are not registered.</p></main>`;
 } else {
   const service = createVideoEvidenceService(fixture!); const tools = [createVideoSearchTool(service), createVideoTranscriptTool(service)];
-  function VideoRoot() { const protocol = useVideoRegistration(tools); return <VideoApp fixture={fixture!} service={service} protocol={protocol} />; }
+  function VideoRoot() { const protocol = useVideoRegistration(tools);
+    useEffect(() => installVideoEvidenceResponder(window, paperOrigin!, () => service.readTranscript().evidence,
+      () => protocol.status === "active" || protocol.status === "unsupported"), [protocol.status]);
+    return <VideoApp fixture={fixture!} service={service} protocol={protocol} />; }
   createRoot(root).render(<VideoRoot />);
   installVideoReadinessResponder(paperOrigin!);
 }

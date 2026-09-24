@@ -1,3 +1,4 @@
+import { connectedReview, requestVideoEvidence } from "./connected-review";
 import { type FormEvent, useEffect, useReducer, useRef, useState } from "react";
 
 import type { EvidenceSearchResult } from "@vedaxi/contracts";
@@ -254,7 +255,7 @@ function ProtocolStatus({
       setSimulationLog({
         ok: false,
         query,
-        message: "FAIL-CLOSED (403): Agent tool invocation rejected. Publisher has revoked WebMCP tool surface.",
+        message: `Local diagnostic not run: native registration is ${protocol.status}. No HTTP request was sent.`,
         timestamp
       });
     } else {
@@ -262,7 +263,7 @@ function ProtocolStatus({
       setSimulationLog({
         ok: true,
         query,
-        message: `200 OK: Agent retrieved passage: "${results[0]?.evidence.excerpt ?? "Evidence found"}"`,
+        message: `Local evidence service returned: "${results[0]?.evidence.excerpt ?? "Evidence found"}"`,
         timestamp
       });
     }
@@ -280,15 +281,15 @@ function ProtocolStatus({
 
       <div className="protocol__surface">
         <p className="protocol__surface-label mono">
-          {isActive ? "Exposed WebMCP Tools (2)" : "Exposed WebMCP Tools (0 — Revoked)"}
+          {isActive ? "Exposed WebMCP Tools (2)" : protocol.status === "disabled" ? "Exposed WebMCP Tools (0 — Revoked)" : `Exposed WebMCP Tools (0 — ${protocol.status})`}
         </p>
         <ul className="protocol__tool-list" aria-label="Live WebMCP tools">
           <li className={isActive ? "tool-active" : "tool-revoked"}>
-            <code>paper.search_evidence</code>
+            <code>search_paper_evidence</code>
             <span className="tool-badge">{isActive ? "active" : "withdrawn"}</span>
           </li>
           <li className={isActive ? "tool-active" : "tool-revoked"}>
-            <code>paper.propose_focus</code>
+            <code>request_discrepancy_focus</code>
             <span className="tool-badge">{isActive ? "active" : "withdrawn"}</span>
           </li>
         </ul>
@@ -309,7 +310,7 @@ function ProtocolStatus({
           type="button"
           onClick={simulateAgentCall}
         >
-          <span>▶ Simulate Agent Invocation</span>
+          <span>▶ Run local service diagnostic</span>
         </button>
       </div>
 
@@ -495,51 +496,6 @@ interface ExecutionStep {
   status: "pending" | "running" | "success" | "blocked";
 }
 
-export const BENCHMARK_PAPERS = [
-  {
-    id: "attention-trial",
-    name: "Paper 1 · Attention Recovery",
-    badge: "⚠️ Discrepancy (40 ≠ 34)",
-    title: "Attention recovery after interrupted analytical work",
-    paperClaim: "Forty participants completed the study and were included in the final analysis.",
-    enrolled: 40,
-    excluded: 6,
-    videoCue: "We recruited forty participants. Six sessions had calibration drift, so we removed them before modeling and did not replace them.",
-    videoTimestamp: "00:03:12",
-    exclusionReason: "Sensor calibration drift",
-    expectedOutcome: "discrepancy" as const,
-    derivedN: 34
-  },
-  {
-    id: "neural-replication",
-    name: "Paper 2 · Neural Latency (Clean)",
-    badge: "✅ Clean Paper (48 = 48)",
-    title: "Neural latency invariance under double-blind replication",
-    paperClaim: "Forty-eight participants completed the trial and were included in the full statistical model.",
-    enrolled: 48,
-    excluded: 0,
-    videoCue: "All forty-eight recruited participants passed calibration thresholds and completed the entire task matrix with zero data exclusions.",
-    videoTimestamp: "00:02:40",
-    exclusionReason: "Zero Exclusions (All sessions valid)",
-    expectedOutcome: "concordant" as const,
-    derivedN: 48
-  },
-  {
-    id: "fmri-decision",
-    name: "Paper 3 · fMRI Decision Mapping",
-    badge: "⚠️ Discrepancy (64 ≠ 56)",
-    title: "Functional MRI decision mapping in high-friction tasks",
-    paperClaim: "Sixty-four participants underwent full BOLD imaging and were evaluated in the primary cohort.",
-    enrolled: 64,
-    excluded: 8,
-    videoCue: "Eight participants showed excessive head displacement exceeding our 3mm motion ceiling, so we discarded their scans prior to spatial normalization.",
-    videoTimestamp: "00:04:15",
-    exclusionReason: "Head motion artifacts (>3mm)",
-    expectedOutcome: "discrepancy" as const,
-    derivedN: 56
-  }
-];
-
 export function PaperApp({
   fixture,
   service,
@@ -571,11 +527,6 @@ export function PaperApp({
   const hasFocus = focus !== null;
   const focusActive = hasFocus && !stageRestored;
 
-  const [selectedCorpusId, setSelectedCorpusId] = useState<string>("attention-trial");
-  const selectedPaper = BENCHMARK_PAPERS.find((p) => p.id === selectedCorpusId) || BENCHMARK_PAPERS[0];
-  const derivedCohort = selectedPaper.enrolled - selectedPaper.excluded;
-  const isCorpusDiscrepant = selectedPaper.excluded > 0;
-
   const [prompt, setPrompt] = useState("");
   const [isExecuting, setIsExecuting] = useState(false);
   const [executionTrace, setExecutionTrace] = useState<ExecutionStep[] | null>(null);
@@ -594,236 +545,42 @@ export function PaperApp({
     "Derive final analyzed sample size across origins"
   ] as const;
 
+  const reviewAbort = useRef<AbortController | null>(null);
+  const accessStatus = useRef(protocol.status);
+  accessStatus.current = protocol.status;
+  useEffect(() => {
+    if (protocol.status === "disabled" || protocol.status === "error") reviewAbort.current?.abort();
+    return () => reviewAbort.current?.abort();
+  }, [protocol.status]);
   const runAgentWorkflow = async (userPrompt: string) => {
-    if (!userPrompt.trim()) return;
-    setPrompt(userPrompt);
-    setIsExecuting(true);
-
-    const activeCorpus = BENCHMARK_PAPERS.find((p) => p.id === selectedCorpusId) || BENCHMARK_PAPERS[0];
-
-    if (isProtocolDisabled) {
+    if (!userPrompt.trim() || isExecuting) return;
+    setPrompt(userPrompt); setIsExecuting(true); setSynthesisResult(null);
+    reviewAbort.current?.abort();
+    const controller = new AbortController(); reviewAbort.current = controller;
+    setExecutionTrace([{id: "paper", kind: "query-paper", title: "Read publisher evidence", detail: "Waiting for the independent Video publisher reply", status: "running"}]);
+    try {
+      const remote = videoFrameRef.current?.contentWindow;
+      if (isProtocolDisabled || !normalizedVideoOrigin || !remote) throw new Error("Independent evidence is unavailable or publisher access is off");
+      const paperEvidence = service.search("final analyzed sample")[0]?.evidence;
+      if (!paperEvidence) throw new Error("Paper evidence unavailable");
+      const result = await connectedReview({
+        paper: paperEvidence, paperOrigin: window.location.origin, videoOrigin: normalizedVideoOrigin,
+        readVideo: () => requestVideoEvidence(window, remote, normalizedVideoOrigin, controller.signal),
+        canContinue: () => !controller.signal.aborted && !["disabled", "error", "checking"].includes(accessStatus.current),
+        propose: request => dispatchPublisher(requestFocusAction(request))
+      });
       setExecutionTrace([
-        {
-          id: "fail-closed",
-          kind: "fail-closed",
-          title: "WebMCP Protocol Revoked by Publisher",
-          detail: "403 Fail-Closed: Publisher has withdrawn native agent capabilities. Agent cannot invoke cross-origin tools.",
-          status: "blocked"
-        }
+        {id: "paper", kind: "query-paper", title: "Paper passage retrieved", detail: `${paperEvidence.sourceOrigin}: ${paperEvidence.excerpt}`, status: "success"},
+        {id: "video", kind: "query-video", title: "Independent Video reply received", detail: `${result.video.sourceOrigin} | ${result.video.locator}: ${result.video.excerpt}`, status: "success"},
+        {id: "derive", kind: "derivation", title: "Controlled comparison", detail: "40 - 6 = 34. Fictional study; this does not establish scientific truth.", status: "success"},
+        {id: "human", kind: "stage-focus", title: "Proposal saved for human review", detail: "Citation status is unchanged. Only Confirm changes it to blocked; Reject dismisses the proposal.", status: "success"}
       ]);
-      setSynthesisResult({
-        mode: "revoked",
-        title: "⚠ Unqualified Surface Reading (WebMCP Revoked)",
-        finding: `Superficial Finding: Paper states ${activeCorpus.enrolled} participants completed the study.`,
-        details: "WARNING: Cross-origin inspection is BLOCKED. The agent cannot verify author video transcript exclusions because the publisher revoked WebMCP tool access. Data integrity cannot be guaranteed."
-      });
-      setIsExecuting(false);
-      return;
-    }
-
-    const initialSteps: ExecutionStep[] = [
-      {
-        id: "step-1",
-        kind: "query-paper",
-        title: "Step 1 · Discovering Paper Origin & Searching Evidence",
-        detail: `Invoking paper.search_evidence on "${activeCorpus.title}"…`,
-        status: "running"
-      },
-      {
-        id: "step-2",
-        kind: "query-video",
-        title: "Step 2 · Discovering Independent Video Origin",
-        detail: "Awaiting cross-origin handshake with Video origin…",
-        status: "pending"
-      },
-      {
-        id: "step-3",
-        kind: "derivation",
-        title: "Step 3 · Cross-Origin Friction & Invariant Derivation",
-        detail: "Awaiting multi-origin assertions…",
-        status: "pending"
-      },
-      {
-        id: "step-4",
-        kind: "stage-focus",
-        title: "Step 4 · Staging Human Decision Gate",
-        detail: "Awaiting discrepancy synthesis…",
-        status: "pending"
-      }
-    ];
-
-    setExecutionTrace(initialSteps);
-    setSynthesisResult(null);
-
-    // Step 1: Real query to PaperEvidenceService / active Corpus
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    const paperExcerpt =
-      activeCorpus.id === "attention-trial"
-        ? (service.search("final analyzed sample")[0]?.evidence?.excerpt ?? activeCorpus.paperClaim)
-        : activeCorpus.paperClaim;
-    const paperCohort = activeCorpus.enrolled;
-
-    setExecutionTrace((prev) =>
-      prev?.map((s) =>
-        s.id === "step-1"
-          ? {
-              ...s,
-              status: "success",
-              detail: `✓ Found in Paper Methods: "${paperExcerpt}" (${paperCohort} Reported Enrolled)`
-            }
-          : s.id === "step-2"
-            ? {
-                ...s,
-                status: "running",
-                detail: `Querying video.read_transcript via cross-origin RPC for: "${activeCorpus.title}"…`
-              }
-            : s
-      ) ?? null
-    );
-
-    // Step 2: Query video origin / active Corpus cue
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    let videoExcerpt = activeCorpus.videoCue;
-    const videoTimestamp = activeCorpus.videoTimestamp;
-    const videoExcluded = activeCorpus.excluded;
-    const computedCohort = paperCohort - videoExcluded;
-    const isConcordant = activeCorpus.expectedOutcome === "concordant";
-
-    if (activeCorpus.id === "attention-trial" && normalizedVideoOrigin && videoFrameRef.current?.contentWindow) {
-      try {
-        const rpcPayload = {
-          jsonrpc: "2.0",
-          id: `rpc-${Date.now()}`,
-          method: "tools/call",
-          params: { name: "read_video_transcript", arguments: {} }
-        };
-        videoFrameRef.current.contentWindow.postMessage(rpcPayload, normalizedVideoOrigin);
-      } catch {
-        // Fallback gracefully
-      }
-    }
-
-    setExecutionTrace((prev) =>
-      prev?.map((s) =>
-        s.id === "step-2"
-          ? {
-              ...s,
-              status: "success",
-              detail: `✓ Transcript cue at ${videoTimestamp}: "${videoExcerpt}"`
-            }
-          : s.id === "step-3"
-            ? {
-                ...s,
-                status: "running",
-                detail: "Evaluating assertion divergence dynamically across independent origins…"
-              }
-            : s
-      ) ?? null
-    );
-
-    // Step 3: Calculation & Assertion Invariant
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    if (isConcordant) {
-      setExecutionTrace((prev) =>
-        prev?.map((s) =>
-          s.id === "step-3"
-            ? {
-                ...s,
-                status: "success",
-                detail: `✅ Concordance Verified: ${paperCohort} reported in Paper = ${computedCohort} verified in Video (0 exclusions). Clean replication confirmed.`
-              }
-            : s.id === "step-4"
-              ? {
-                  ...s,
-                  status: "running",
-                  detail: "Verifying publication citation authorization status…"
-                }
-              : s
-        ) ?? null
-      );
-    } else {
-      setExecutionTrace((prev) =>
-        prev?.map((s) =>
-          s.id === "step-3"
-            ? {
-                ...s,
-                status: "success",
-                detail: `⚡ Discrepancy Detected: ${paperCohort} recruited in Paper − ${videoExcluded} excluded in Video = ${computedCohort} analyzed cohort (${activeCorpus.exclusionReason}).`
-              }
-            : s.id === "step-4"
-              ? {
-                  ...s,
-                  status: "running",
-                  detail: "Submitting focus proposal to Chapter 05 for human confirmation…"
-                }
-              : s
-        ) ?? null
-      );
-    }
-
-    // Step 4: Gate Decision
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    if (isConcordant) {
-      setExecutionTrace((prev) =>
-        prev?.map((s) =>
-          s.id === "step-4"
-            ? {
-                ...s,
-                status: "success",
-                detail: "✓ Citation Authorized: Clean paper passed cross-origin verification. Zero false alarms triggered."
-              }
-            : s
-        ) ?? null
-      );
-      setSynthesisResult({
-        mode: "augmented",
-        title: "✅ Clean Paper Verified (Zero False Alarms)",
-        finding: `Verified Cohort: ${computedCohort} participants analyzed (100% Concordant).`,
-        details: `INTEGRITY CONFIRMED: No unreplaced exclusions detected across independent origins. Citation is authorized without blocking.`
-      });
-    } else {
-      const dynamicFocusRequest: FocusRequest = {
-        paperEvidenceId: "paper.methods.final-analysis",
-        videoEvidenceId: "video.transcript.calibration-drift",
-        analyzedSample: (computedCohort === 34 ? 34 : computedCohort) as 34,
-        reasoning: `The video excludes ${videoExcluded} of the paper's ${paperCohort} reported participants due to ${activeCorpus.exclusionReason}.`,
-        provenance: {
-          paper: `VEDAXI verification — ${activeCorpus.title}`,
-          video: `VEDAXI video origin — cue at ${videoTimestamp}`,
-          derivation: `Externally supplied comparison: ${paperCohort} - ${videoExcluded} = ${computedCohort}`
-        }
-      };
-      dispatchPublisher(requestFocusAction(dynamicFocusRequest));
-      setExecutionTrace((prev) =>
-        prev?.map((s) =>
-          s.id === "step-4"
-            ? {
-                ...s,
-                status: "success",
-                detail: "✓ Staged in Chapter 05: Handed off to human researcher to block citation."
-              }
-            : s
-        ) ?? null
-      );
-      setSynthesisResult({
-        mode: "augmented",
-        title: "✓ Cross-Origin Discrepancy Discovered (WebMCP Active)",
-        finding: `Qualified Cohort: ${computedCohort} participants analyzed (${paperCohort} reported − ${videoExcluded} exclusions).`,
-        details: `EVIDENCE VERIFIED: Cross-origin investigation caught ${activeCorpus.exclusionReason} at ${videoTimestamp}. Citation blocked until human authorization in Chapter 05.`
-      });
-    }
-
-    setIsExecuting(false);
-
-    if (typeof document !== "undefined") {
-      const targetId = isConcordant ? "focus-preview-title" : "chapter-decision";
-      const target = document.getElementById(targetId);
-      if (target) {
-        setTimeout(() => {
-          target.scrollIntoView({ behavior: "smooth", block: "start" });
-        }, 150);
-      }
-    }
+      setSynthesisResult({mode: "augmented", title: "Independent evidence received", finding: "The returned passages disagree: 40 reported, 6 excluded, 34 remaining.", details: "A review proposal is saved in this browser. A human must confirm or reject it below; no citation decision was made automatically."});
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Evidence review failed";
+      setExecutionTrace([{id: "blocked", kind: "fail-closed", title: "Review stopped", detail: message, status: "blocked"}]);
+      setSynthesisResult({mode: "revoked", title: "No verified result", finding: message, details: "No successful proposal or new citation decision is claimed. Existing saved decisions are preserved. You can still read and search the paper."});
+    } finally { setIsExecuting(false); }
   };
 
   useEffect(() => {
@@ -880,7 +637,6 @@ export function PaperApp({
     return "dark";
   });
   const [isDevConsoleOpen, setIsDevConsoleOpen] = useState(false);
-  const [devConsoleTab, setDevConsoleTab] = useState<"rpc" | "schema" | "curl">("rpc");
 
   const toggleTheme = () => {
     const next = theme === "dark" ? "light" : "dark";
@@ -936,7 +692,8 @@ export function PaperApp({
         window.localStorage.setItem("vedaxi-pilot-email", finalPilotEmail.trim());
       }
     } catch {
-      // Ignore in restricted environments
+      setFinalPilotSubmitted(false);
+      return;
     }
     setFinalPilotSubmitted(true);
   };
@@ -1017,7 +774,7 @@ export function PaperApp({
             Check whether a paper&rsquo;s claims match its source evidence.
           </h2>
           <p className="product-intro-hero__sub">
-            Built for <strong>researchers, peer reviewers, and autonomous AI verification</strong> to catch hidden contradictions between published manuscripts and live conference presentations before false citations spread.
+            A controlled demonstration for <strong>researchers and peer reviewers</strong>: compare publisher-owned passages and keep the citation decision with a human. The sample study is fictional.
           </p>
           <div className="product-intro-hero__actions">
             <a href="#focus-preview-title" className="product-intro-btn product-intro-btn--primary">
@@ -1034,7 +791,7 @@ export function PaperApp({
             <span className="eyebrow">Interactive 3D Protocol Visualizer</span>
             <h2>Two-Origin WebMCP Constellation</h2>
             <p className="protocol-3d-section__desc">
-              Real-time spatial visualization of independent research origins (Paper & Video), WebMCP tool discovery, dynamic contradiction routing, and human-in-the-loop authorization. Click or tap any node to inspect evidence.
+              Illustrative 3D map of Paper, Video, and human review. Use the evidence review below to see actual returned passages and execution status; the animation is not an execution receipt.
             </p>
           </div>
           <div className="protocol-3d-stage-container">
@@ -1072,27 +829,19 @@ export function PaperApp({
               <p className="judge-lead">
                 <strong>The Problem:</strong> A single AI reading the paper alone believes <strong>40 participants</strong> were analyzed.
                 <br />
-                <strong>The Solution:</strong> VEDAXI queries the independent Video origin via WebMCP, catches <strong>6 participants excluded at 00:03:12</strong>, derives true <strong>N = 34</strong>, and enforces human sign-off before citation.
+                <strong>The Solution:</strong> The guided bridge requests the independent Video passage. The controlled comparison checks the returned passages and proposes review. Only a human can block the citation.
               </p>
               <div className="judge-action-row">
                 <button
                   type="button"
                   className="judge-run-btn"
-                  onClick={() => {
-                    startGuidedTour();
-                    dispatchPublisher(requestFocusAction(CONTROLLED_FOCUS_REQUEST));
-                    setSynthesisResult({
-                      mode: "augmented",
-                      title: "✓ Verified Cross-Origin Synthesis (WebMCP Active)",
-                      finding: "Qualified Sample: 34 participants analyzed (40 recruited in Paper minus 6 excluded in Video at 00:03:12).",
-                      details: "EVIDENCE VERIFIED: Cross-origin WebMCP inspection caught the hidden exclusion. Semantic focus staged in Chapter 05 to block premature citation until confirmed by researcher."
-                    });
-                  }}
+                  disabled={isExecuting || isProtocolDisabled}
+                  onClick={() => runAgentWorkflow("Compare paper cohort with author video transcript")}
                 >
                   ▶ Run 15s Interactive Proof
                 </button>
                 <a
-                  href="https://vedaxi-protocol-edition.vercel.app/"
+                  href="#protocol-3d-stage"
                   target="_blank"
                   rel="noreferrer"
                   className="judge-link-btn"
@@ -1101,9 +850,9 @@ export function PaperApp({
                 </a>
               </div>
               <div className="judge-rubric-pills">
-                <span>🛡️ Fail-Closed 403 Kill Switch</span>
-                <span>🧪 220/220 Tests Green</span>
-                <span>⚡ Live JSON-RPC 2.0 Tools</span>
+                <span>🛡️ Publisher access control</span>
+                <span>🧪 Controlled fixture tests</span>
+                <span>⚡ Browser-native tools</span>
                 <span>🔒 Two-Phase Human Gate</span>
               </div>
             </div>
@@ -1116,7 +865,7 @@ export function PaperApp({
                 <span className="eyebrow">The Core Innovation</span>
                 <h2 className="webmcp-mission-title">What VEDAXI WebMCP Solves</h2>
                 <p className="webmcp-mission-subtitle">
-                  Autonomous cross-origin truth verification for AI agents — eliminating single-source hallucinations across published literature and live multimedia.
+                  Publisher-owned evidence from two origins, with a human decision before changing citation status.
                 </p>
               </div>
               <div className="webmcp-mission-grid">
@@ -1125,7 +874,7 @@ export function PaperApp({
                   <div className="step-content">
                     <h3>1. The Single-Source Flaw</h3>
                     <p>
-                      Today’s AI agents (ChatGPT, Claude, Perplexity) only read static text from a single source. If a published PDF paper claims <strong>40 participants completed the trial</strong>, the AI blindly cites <strong>N = 40</strong> as absolute truth.
+                      Reading only one source can miss conflicting evidence. This fictional paper reports <strong>40 participants</strong>; the separate Video publisher describes exclusions.
                     </p>
                   </div>
                 </div>
@@ -1134,7 +883,7 @@ export function PaperApp({
                   <div className="step-content">
                     <h3>2. Cross-Origin WebMCP Protocol</h3>
                     <p>
-                      VEDAXI introduces <strong>WebMCP (Web Model Context Protocol)</strong>, enabling the AI agent to query independent web origins. The agent inspects the author&rsquo;s conference talk (Origin B at 00:03:12) where they admit <strong>6 participants had sensor calibration drift</strong>.
+                      VEDAXI uses <strong>WebMCP browser tools</strong>, enabling the AI agent to query independent web origins. The agent inspects the author&rsquo;s conference talk (Origin B at 00:03:12) where they admit <strong>6 participants had sensor calibration drift</strong>.
                     </p>
                   </div>
                 </div>
@@ -1143,7 +892,7 @@ export function PaperApp({
                   <div className="step-content">
                     <h3>3. Fail-Closed Integrity Gate</h3>
                     <p>
-                      VEDAXI flags the contradiction (<strong>40 ≠ 34</strong>), updates the true analysis cohort to <strong>34</strong>, and <strong>blocks automated citation</strong> until a human researcher explicitly reviews and authorizes the evidence.
+                      The guided comparison proposes the discrepancy (<strong>40 ≠ 34</strong>). The citation remains unchanged until a human selects <strong>Confirm and block citation</strong>; Reject dismisses the proposal.
                     </p>
                   </div>
                 </div>
@@ -1160,9 +909,9 @@ export function PaperApp({
         <section className="focus-preview agent-copilot" aria-labelledby="focus-preview-title">
           <div className="agent-copilot__header">
             <div>
-              <p className="eyebrow">WebMCP Agent Research Copilot · Simulated invocation — calls the same evidence service the WebMCP tools expose</p>
+              <p className="eyebrow">Guided cross-origin review · reads publisher evidence services</p>
               <h2 id="focus-preview-title">Focused Review</h2>
-              <p>Ask an AI research query to dynamically inspect and derive facts across independent WebMCP origins.</p>
+              <p>Run the controlled comparison and inspect the returned passages before making a decision.</p>
             </div>
             <div className="agent-copilot__controls-cluster">
               <button
@@ -1173,160 +922,16 @@ export function PaperApp({
                 {isProtocolDisabled ? "Enable WebMCP Tools" : "Turn WebMCP Off"}
               </button>
               <div className="agent-copilot__status-badge" data-disabled={isProtocolDisabled}>
-                {isProtocolDisabled ? "○ Protocol Revoked (Off)" : "● WebMCP Active (On)"}
+                {protocol.status === "active" ? "Native WebMCP active · guided bridge available" : protocol.status === "unsupported" ? "Native WebMCP unavailable · guided bridge available" : protocol.status === "checking" ? "Checking native WebMCP" : "Publisher tools and guided access off"}
               </div>
             </div>
           </div>
 
-          {/* Multi-Paper Benchmark & False-Positive Quality Gate */}
-          <div className="benchmark-suite-card" aria-label="Three deterministic demo fixtures">
-            <div className="benchmark-header">
-              <div className="benchmark-title-wrap">
-                <span className="eyebrow">Deterministic Benchmark Fixtures</span>
-                <h3 className="benchmark-title">Three deterministic demo fixtures</h3>
-                <p className="benchmark-desc">
-                  Select a paper below to test VEDAXI across clean vs discrepant studies. Verify that it catches real discrepancies while <strong>never crying wolf on clean papers (zero false alarms)</strong>:
-                </p>
-                <p className="benchmark-disclaimer mono">These are fixed demo cases, not a measured accuracy rate.</p>
-              </div>
-              <div className="benchmark-scorecard mono">
-                <div className="scorecard-item">
-                  <span className="scorecard-label">Clean verification</span>
-                  <strong className="scorecard-val text-emerald">1 of 1 clean paper passed</strong>
-                </div>
-                <div className="scorecard-item">
-                  <span className="scorecard-label">Discrepancy recall</span>
-                  <strong className="scorecard-val text-emerald">2 of 2 discrepancies caught</strong>
-                </div>
-              </div>
-            </div>
-
-            <div className="benchmark-chips-grid" role="tablist" aria-label="Benchmark papers">
-              {BENCHMARK_PAPERS.map((corpus) => (
-                <button
-                  key={corpus.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={selectedCorpusId === corpus.id}
-                  className={`benchmark-chip ${selectedCorpusId === corpus.id ? "benchmark-chip--active" : ""}`}
-                  onClick={() => {
-                    setSelectedCorpusId(corpus.id);
-                    setPrompt(`Verify cohort integrity for: ${corpus.title}`);
-                  }}
-                >
-                  <div className="chip-top">
-                    <span className="chip-badge mono">{corpus.badge}</span>
-                    <span className="chip-status-text mono">{selectedCorpusId === corpus.id ? "● ACTIVE" : "Click to select"}</span>
-                  </div>
-                  <strong className="chip-title">{corpus.name}</strong>
-                  <span className="chip-sub mono">Claim: {corpus.enrolled} Enrolled · Video Drop: −{corpus.excluded}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Interactive Simulation Switcher */}
-          <div className="simulation-showcase-box" aria-label="Interactive Simulation: With vs Without WebMCP">
-            <div className="simulation-showcase-header">
-              <span className="eyebrow">Interactive Live Experiment</span>
-              <h3 className="simulation-showcase-title">With WebMCP vs Without WebMCP Simulation</h3>
-              <p className="simulation-showcase-desc">
-                Select a mode below to test how an AI agent performs research with and without cross-origin truth verification:
-              </p>
-            </div>
-            <div className="simulation-cards-grid">
-              {/* Card A: Without WebMCP */}
-              <div
-                className={`simulation-mode-card ${isProtocolDisabled ? "simulation-mode-card--active-disabled" : ""}`}
-                role="button"
-                tabIndex={0}
-                onClick={() => {
-                  if (!isProtocolDisabled) protocol.disable();
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !isProtocolDisabled) protocol.disable();
-                }}
-              >
-                <div className="simulation-card-top">
-                  <span className="sim-badge sim-badge--danger mono">MODE A · WITHOUT WebMCP</span>
-                  <span className="sim-status-pill mono">{isProtocolDisabled ? "● SELECTED (Off)" : "Click to select"}</span>
-                </div>
-                <h4>Naive Single-Source AI</h4>
-                <p className="sim-desc">
-                  Agent reads only static paper text. It cannot query independent web origins.
-                </p>
-                <div className="sim-outcome sim-outcome--fail">
-                  <strong>
-                    {isCorpusDiscrepant
-                      ? `❌ Result: False Citation (N = ${selectedPaper.enrolled})`
-                      : `⚠ Result: Unverified Citation (N = ${selectedPaper.enrolled})`}
-                  </strong>
-                  <span>
-                    {isCorpusDiscrepant
-                      ? `Blindly believes ${selectedPaper.enrolled} participants were analyzed. Misses the ${selectedPaper.excluded} dropped sessions in the video talk.`
-                      : `Cites N = ${selectedPaper.enrolled} directly from static text without cross-origin secondary verification.`}
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  className="sim-run-btn sim-run-btn--danger"
-                  disabled={isExecuting}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    if (!isProtocolDisabled) protocol.disable();
-                    runAgentWorkflow("Without WebMCP: Search paper cohort");
-                  }}
-                >
-                  ▶ Simulate Naive AI (WebMCP Off)
-                </button>
-              </div>
-
-              {/* Card B: With WebMCP */}
-              <div
-                className={`simulation-mode-card ${!isProtocolDisabled ? "simulation-mode-card--active-enabled" : ""}`}
-                role="button"
-                tabIndex={0}
-                onClick={() => {
-                  if (isProtocolDisabled) protocol.enable();
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && isProtocolDisabled) protocol.enable();
-                }}
-              >
-                <div className="simulation-card-top">
-                  <span className="sim-badge sim-badge--success mono">MODE B · WITH WebMCP</span>
-                  <span className="sim-status-pill mono">{!isProtocolDisabled ? "● SELECTED (Active)" : "Click to select"}</span>
-                </div>
-                <h4>VEDAXI Cross-Origin Agent</h4>
-                <p className="sim-desc">
-                  Agent queries Paper + Video origins in real time using standardized WebMCP tools.
-                </p>
-                <div className="sim-outcome sim-outcome--success">
-                  <strong>
-                    {isCorpusDiscrepant
-                      ? `✅ Result: True Cohort (${selectedPaper.enrolled} − ${selectedPaper.excluded} = ${derivedCohort})`
-                      : `✅ Result: Verified Cohort (${selectedPaper.enrolled} = ${derivedCohort})`}
-                  </strong>
-                  <span>
-                    {isCorpusDiscrepant
-                      ? `Catches video confession at ${selectedPaper.videoTimestamp}. Derives ${derivedCohort}, blocks citation, and engages Human Gate.`
-                      : `Verifies author talk at ${selectedPaper.videoTimestamp}. Confirms ${selectedPaper.enrolled} participants with zero exclusions, and authorizes citation.`}
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  className="sim-run-btn sim-run-btn--success"
-                  disabled={isExecuting}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    if (isProtocolDisabled) protocol.enable();
-                    runAgentWorkflow("Compare paper cohort with author video transcript");
-                  }}
-                >
-                  ▶ Simulate VEDAXI Agent (WebMCP On)
-                </button>
-              </div>
-            </div>
+          <div className="benchmark-suite-card">
+            <h3>One controlled study, two independent publishers</h3>
+            <p>This guided check reads the Paper evidence service and waits for the Video publisher to return its own transcript passage. It proposes a discrepancy for a human decision.</p>
+            <p>No model is called. The browser bridge is separate from native WebMCP, which is available only in supporting browsers. This is a fictional study, not an accuracy benchmark.</p>
+            <button type="button" disabled={isExecuting || isProtocolDisabled} onClick={() => runAgentWorkflow("Compare paper cohort with author video transcript")}>Compare both publishers</button>
           </div>
 
           <form
@@ -1337,7 +942,7 @@ export function PaperApp({
             }}
           >
             <label htmlFor="copilot-prompt" className="copilot-prompt-label">
-              Agent Research Query
+              Review question
             </label>
             <div className="copilot-form__controls">
               <input
@@ -1348,7 +953,7 @@ export function PaperApp({
                 disabled={isExecuting}
               />
               <button type="submit" disabled={isExecuting || !prompt.trim()}>
-                {isExecuting ? "Executing Agent…" : "Run Agent Query"}
+                {isExecuting ? "Reading evidence…" : "Run evidence review"}
               </button>
             </div>
           </form>
@@ -1371,7 +976,7 @@ export function PaperApp({
             <div className={`copilot-synthesis copilot-synthesis--${synthesisResult.mode}`} role="region" aria-live="polite">
               <div className="synthesis-header">
                 <strong>{synthesisResult.title}</strong>
-                <span className="mono">{synthesisResult.mode === "augmented" ? "Cross-Origin Verified" : "Fail-Closed Surface"}</span>
+                <span className="mono">{synthesisResult.mode === "augmented" ? "Publisher reply received" : "Fail-Closed Surface"}</span>
               </div>
               <p className="synthesis-finding">{synthesisResult.finding}</p>
               <p className="synthesis-details mono">{synthesisResult.details}</p>
@@ -1380,7 +985,7 @@ export function PaperApp({
 
           {executionTrace && (
             <div className="copilot-trace" role="status" aria-live="polite">
-              <p className="eyebrow mono">Live Agent Execution Trace & Telemetry</p>
+              <p className="eyebrow mono">Guided evidence execution trace</p>
               <ol className="copilot-trace__steps">
                 {executionTrace.map((step) => (
                   <li key={step.id} className={`trace-step trace-step--${step.status}`}>
@@ -1399,15 +1004,7 @@ export function PaperApp({
             <button
               type="button"
               disabled={hasFocus}
-              onClick={() => {
-                dispatchPublisher(requestFocusAction(CONTROLLED_FOCUS_REQUEST));
-                setSynthesisResult({
-                  mode: "augmented",
-                  title: "✓ Verified Cross-Origin Synthesis (WebMCP Active)",
-                  finding: "Qualified Sample: 34 participants analyzed (40 recruited in Paper minus 6 excluded in Video at 00:03:12).",
-                  details: "EVIDENCE VERIFIED: Cross-origin WebMCP inspection caught the hidden exclusion. Semantic focus staged in Chapter 05 to block premature citation until confirmed by researcher."
-                });
-              }}
+              onClick={() => runAgentWorkflow("Compare paper cohort with author video transcript")}
             >
               {hasFocus ? "Focus review active" : "Run deterministic focus preview"}
             </button>
@@ -1421,130 +1018,16 @@ export function PaperApp({
                 <span className="dev-console-icon">⚡</span>
                 <div>
                   <h3>WebMCP Developer Console & Protocol Inspector</h3>
-                  <p className="mono-subtext">Live JSON-RPC 2.0 tool endpoints registered by WebMCP protocol surface</p>
+                  <p className="mono-subtext">Browser-native tool registration and guided evidence transport</p>
                 </div>
-              </div>
-              <div className="dev-console-tabs">
-                <button
-                  type="button"
-                  className={`dev-tab-btn ${devConsoleTab === "rpc" ? "active" : ""}`}
-                  onClick={() => setDevConsoleTab("rpc")}
-                >
-                  Live JSON-RPC Stream
-                </button>
-                <button
-                  type="button"
-                  className={`dev-tab-btn ${devConsoleTab === "schema" ? "active" : ""}`}
-                  onClick={() => setDevConsoleTab("schema")}
-                >
-                  Tool Schemas
-                </button>
-                <button
-                  type="button"
-                  className={`dev-tab-btn ${devConsoleTab === "curl" ? "active" : ""}`}
-                  onClick={() => setDevConsoleTab("curl")}
-                >
-                  cURL / Agent Snippet
-                </button>
               </div>
             </div>
-
             <div className="dev-console-body">
-              {devConsoleTab === "rpc" && (
-                <div className="dev-console-panel space-y-3">
-                  <div className="rpc-stream-item">
-                    <div className="rpc-badge-row">
-                      <span className="rpc-badge rpc-badge--req">JSON-RPC 2.0 REQ</span>
-                      <span className="mono text-xs opacity-75">tools/call: paper.search_evidence</span>
-                    </div>
-                    <pre className="mono-code">{JSON.stringify({
-                      jsonrpc: "2.0",
-                      id: "call-001",
-                      method: "tools/call",
-                      params: {
-                        name: "paper.search_evidence",
-                        arguments: { query: "cohort participants final analysis" }
-                      }
-                    }, null, 2)}</pre>
-                  </div>
-                  <div className="rpc-stream-item">
-                    <div className="rpc-badge-row">
-                      <span className="rpc-badge rpc-badge--res">JSON-RPC 2.0 RES (200 OK)</span>
-                      <span className="mono text-xs rpc-meta-hints">readOnlyHint: true · untrustedContentHint: true</span>
-                    </div>
-                    <pre className="mono-code">{JSON.stringify({
-                      jsonrpc: "2.0",
-                      id: "call-001",
-                      result: {
-                        id: "paper.methods.final-analysis",
-                        excerpt: "The cohort comprised forty participants (N = 40) across continuous tracking trials.",
-                        locator: "#methods-participants",
-                        readOnlyHint: true,
-                        untrustedContentHint: true
-                      }
-                    }, null, 2)}</pre>
-                  </div>
-                </div>
-              )}
-
-              {devConsoleTab === "schema" && (
-                <div className="dev-console-panel">
-                  <pre className="mono-code">{JSON.stringify({
-                    protocolRevision: "2026-03-01",
-                    capabilities: {
-                      tools: {
-                        listChanged: true
-                      }
-                    },
-                    tools: [
-                      {
-                        name: "paper.search_evidence",
-                        description: "Searches controlled paper corpus for participant cohort and methodology statements.",
-                        readOnlyHint: true,
-                        untrustedContentHint: true,
-                        parameters: {
-                          type: "object",
-                          required: ["query"],
-                          properties: {
-                            query: { type: "string", maxLength: 160 }
-                          }
-                        }
-                      },
-                      {
-                        name: "paper.propose_focus",
-                        description: "Stages cross-origin discrepancy focus for mandatory human citation confirmation.",
-                        readOnlyHint: false,
-                        untrustedContentHint: true,
-                        parameters: {
-                          type: "object",
-                          required: ["paperEvidenceId", "videoEvidenceId", "analyzedSample", "derivation"],
-                          properties: {
-                            paperEvidenceId: { type: "string", const: "paper.methods.final-analysis" },
-                            videoEvidenceId: { type: "string", const: "video.transcript.calibration-drift" },
-                            analyzedSample: { type: "integer", const: 34 },
-                            derivation: { type: "string", maxLength: 280 }
-                          }
-                        }
-                      }
-                    ]
-                  }, null, 2)}</pre>
-                </div>
-              )}
-
-              {devConsoleTab === "curl" && (
-                <div className="dev-console-panel space-y-3">
-                  <p className="mono-subtext">Invoke the live WebMCP evidence service directly from terminal or external AI orchestrators:</p>
-                  <pre className="mono-code">{`# 1. Query Paper Evidence Origin
-curl -X POST "https://vedaxi-integrity-desk.vercel.app/api/webmcp" \\
-  -H "Content-Type: application/json" \\
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"paper.search_evidence","arguments":{"query":"cohort"}}}'
-
-# 2. Query Video Transcript Origin (Cross-Origin Handshake at 00:03:12)
-curl -X POST "https://vedaxi-video-origin-teal.vercel.app/api/webmcp" \\
-  -H "Content-Type: application/json" \\
-  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"video.read_transcript","arguments":{"timestamp":"00:03:12"}}}'`}</pre>
-                </div>
-              )}
+              <div className="dev-console-panel">
+                <p>Native browser tools: search_paper_evidence and request_discrepancy_focus on Paper; search_video_evidence and read_video_transcript on Video.</p>
+                <p>These tools are registered with the browser, not HTTP POST endpoints. The guided comparison uses an origin-checked, read-only postMessage bridge to the same Video evidence service.</p>
+                <p>Native registration: {protocol.status}. Execution results appear in the review trace only after a reply; this panel does not fabricate request or response logs.</p>
+              </div>
             </div>
           </section>
         )}
@@ -1753,7 +1236,7 @@ curl -X POST "https://vedaxi-video-origin-teal.vercel.app/api/webmcp" \\
                     <p role="status" className="embedded-video-status">
                       {videoAvailable === null
                         ? "Checking whether the independent Video publisher is available."
-                        : "Independent Video publisher could not be verified or is unavailable. Direct local evidence player loaded below:"}
+                        : "Independent Video publisher could not be verified or is unavailable. No independent evidence has been received. The local illustration below is not a successful cross-origin result."}
                     </p>
                     <div className="embedded-video-wrapper">
                       <video
@@ -1793,7 +1276,7 @@ curl -X POST "https://vedaxi-video-origin-teal.vercel.app/api/webmcp" \\
                   <p className="section-kicker">Multi-Origin Corroboration</p>
                   <h2 id="evidence-title" tabIndex={-1}>Cross-Origin Evidence Comparison</h2>
                   <p className="lead">
-                    VEDAXI independently extracts and contrasts evidence records from both the written publication (Origin A) and the live presentation talk (Origin B) to catch silent reporting contradictions.
+                    Illustrative dossier for the fictional study. Run the guided comparison above to retrieve the independent Video passage; this static dossier does not certify a live request.
                   </p>
 
                   <div className="evidence-dossier-grid">
@@ -1818,7 +1301,7 @@ curl -X POST "https://vedaxi-video-origin-teal.vercel.app/api/webmcp" \\
                     {/* Origin B */}
                     <div className="evidence-card evidence-card--origin-b">
                       <div className="evidence-card__badge evidence-card__badge--video mono">Origin B · Author Video Talk (00:03:12)</div>
-                      <blockquote cite="https://vedaxi-video-origin-teal.vercel.app/#00:03:12">
+                      <blockquote cite={normalizedVideoOrigin ? `${normalizedVideoOrigin}/#00:03:12` : undefined}>
                         <p>&ldquo;We recruited forty participants. Six sessions had calibration drift, so we removed them before modeling and did not replace them.&rdquo;</p>
                       </blockquote>
                       <aside className="provenance" aria-label="Origin B evidence provenance">
@@ -1826,7 +1309,7 @@ curl -X POST "https://vedaxi-video-origin-teal.vercel.app/api/webmcp" \\
                         <dl>
                           <div><dt>Locator</dt><dd>Transcript Cue 00:03:12</dd></div>
                           <div><dt>Admitted</dt><dd><strong>34 Analyzed (6 Excluded)</strong></dd></div>
-                          <div><dt>Origin</dt><dd className="mono">vedaxi-video-origin-teal.vercel.app</dd></div>
+                          <div><dt>Origin</dt><dd className="mono">{normalizedVideoOrigin ?? "Not configured"}</dd></div>
                           <div><dt>Evidence ID</dt><dd className="mono">video.transcript.calibration-drift</dd></div>
                         </dl>
                       </aside>
@@ -1838,7 +1321,7 @@ curl -X POST "https://vedaxi-video-origin-teal.vercel.app/api/webmcp" \\
                     <p>
                       <strong>Integrity Alert:</strong> The published paper silently omitted 6 excluded participants.
                       An AI relying solely on the text would cite a false sample size of 40.
-                      VEDAXI’s WebMCP agent catches this 6-participant gap and requires human sign-off in Chapter 05 before any citation can proceed.
+                      The guided review can propose this discrepancy using returned passages. Citation status changes only after human confirmation in Chapter 05.
                     </p>
                   </div>
                 </div>
@@ -1926,15 +1409,15 @@ curl -X POST "https://vedaxi-video-origin-teal.vercel.app/api/webmcp" \\
 
             <section className="post-demo-pilot" id="research-pilot" aria-labelledby="pilot-section-title">
               <span className="eyebrow mono">Continuous Pipeline Integrity</span>
-              <h3 id="pilot-section-title" className="final-pilot-title">Join the Research Pilot</h3>
+              <h3 id="pilot-section-title" className="final-pilot-title">Pilot interest (local demo)</h3>
               <p className="pilot-subtitle">
-                Get early access to autonomous cross-origin WebMCP verification for your research pipeline.
+                This form saves an interest note in this browser only. It does not enroll you, contact the team, or send your email to a server.
               </p>
               {finalPilotSubmitted ? (
                 <div className="pilot-confirmation" role="status">
                   <span className="pilot-confirmation__icon" aria-hidden="true">✓</span>
                   <div>
-                    <strong>You&rsquo;re on the pilot list!</strong>
+                    <strong>Interest note saved on this device.</strong>
                     <p className="mono text-xs">{finalPilotEmail}</p>
                   </div>
                 </div>
@@ -1951,7 +1434,7 @@ curl -X POST "https://vedaxi-video-origin-teal.vercel.app/api/webmcp" \\
                     placeholder="researcher@institution.edu"
                   />
                   <button type="submit" className="final-pilot-submit-btn">
-                    Join the research pilot
+                    Save local interest note
                   </button>
                 </form>
               )}

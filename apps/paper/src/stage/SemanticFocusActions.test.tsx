@@ -50,15 +50,12 @@ function tree(state: PublisherState, dispatchPublisher: (action: PublisherAction
 }
 
 describe("Semantic Focus action boundary", () => {
-  it("submits the controlled external result through the provided dispatch closure", () => {
+  it("does not stage local canned evidence when the independent Video is unavailable", async () => {
     const dispatchPublisher = vi.fn(() => { throw new Error("test dispatch"); });
     const button = findButton(tree(initialState, dispatchPublisher), "Run deterministic focus preview");
-
-    expect(() => button?.props.onClick?.()).toThrow("test dispatch");
-    expect(dispatchPublisher).toHaveBeenCalledWith({
-      type: "request-focus",
-      request: CONTROLLED_FOCUS_REQUEST
-    });
+    expect(button).toBeDefined();
+    await button?.props.onClick?.();
+    expect(dispatchPublisher).not.toHaveBeenCalled();
   });
 
   it("maps the human decision controls to exact confirm and reject actions", () => {

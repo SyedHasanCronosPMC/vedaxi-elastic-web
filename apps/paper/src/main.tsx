@@ -41,7 +41,7 @@ const focusTool = createDiscrepancyFocusTool(publisherRuntime.dispatch);
 const tools = [paperEvidenceTool, focusTool] as const;
 let videoOrigin: string | undefined;
 let videoConfigurationError: string | null = null;
-const rawVideoOrigin = import.meta.env.VITE_VIDEO_ORIGIN || (typeof window !== "undefined" && window.location.hostname.includes("vercel.app") ? "https://vedaxi-video-origin-teal.vercel.app" : undefined);
+const rawVideoOrigin = import.meta.env.VITE_VIDEO_ORIGIN;
 try {
   videoOrigin = resolvePaperRuntimeConfig(
     window.location.origin,

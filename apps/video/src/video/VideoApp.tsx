@@ -50,9 +50,10 @@ export function VideoApp({ fixture, service, protocol }: VideoAppProps) {
             <span id="protocol-status" role="status" aria-live="polite" aria-atomic="true" data-status={protocol.status}>
               {protocolStatusCopy(protocol.status)}
             </span>
-            <button type="button" aria-describedby="protocol-status" onClick={protocol.status === "active" ? protocol.disable : protocol.enable}>
-              {protocol.status === "active" ? "Turn agent tools off" : "Check native tools"}
+            <button type="button" aria-describedby="protocol-status" onClick={protocol.status === "active" || protocol.status === "unsupported" ? protocol.disable : protocol.enable}>
+              {protocol.status === "active" || protocol.status === "unsupported" ? "Turn publisher access off" : "Enable publisher access"}
             </button>
+            <p>The publisher switch controls both native tools and the guided evidence bridge. Human transcript reading remains available.</p>
           </div>
         </section>
 

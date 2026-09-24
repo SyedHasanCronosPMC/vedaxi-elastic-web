@@ -14,10 +14,10 @@ Public GitHub: [luxurylifestyleco/vedaxi-elastic-web](https://github.com/luxuryl
 | Shared state | `@vedaxi/state` `PublisherStore.dispatch` is the only mutation boundary. Confirm/reject/reset persist through that API. |
 | M0 | Recorded `PASS`. |
 | M1–M4 | Local testing is finished (Paper, Video/MP4+VTT, shared actions, stage). Registry JSON still has no recorded module `PASS` except M0; that is not “work unstarted.” |
-| Remaining | Public webpage on **Vercel**. **Vercel live URL: (to be provided)** |
+| Deployment | Configure each publisher with the other origin; verify the live workflow after deployment. |
 | CI | GitHub Actions Ubuntu job installs FFmpeg, then `node evals/run-quality-gate.mjs --clean-install`. |
 
-Local testing of Paper, Video, shared state, and the M2 media slot is finished. The remaining product gap is the **webpage that will be hosted on Vercel**. Do not treat a local preview as the public judge URL.
+Paper and Video are independent Vercel apps. A deployment is accepted only after the connected review and human decision are verified on its actual origins.
 
 `.devpost-hackathon-state.json` stays `rules_acknowledged: false` until the project owner acknowledges the rules.
 
@@ -121,3 +121,11 @@ Prototype only. Not a medical or scientific decision system. The tool cannot blo
 ## License
 
 [MIT](LICENSE) — Copyright (c) 2026 COdy Shah and VEDAXI Contributors.
+
+## Connected review and verification boundaries
+
+The guided comparison awaits a reply from the configured Video origin over an explicit, read-only browser message bridge. It validates origin, sender window, request ID and evidence identity; unavailable or disabled publishers cannot produce a successful result. This bridge is distinct from native WebMCP registration. Native tools remain available only in supporting browsers. No HTTP `/api/webmcp` endpoint or model inference is provided.
+
+Only the canonical fictional 40-participant study is connected. Previous secondary scenarios used local predetermined outcomes and are not exposed as verified cross-origin runs. Received passages support the bounded 40 - 6 comparison; a failed or changed passage requires human review. A proposal alone does not block a citation. Human Confirm blocks it; Reject dismisses the proposal. Decisions persist in this browser's local storage, not a shared database. The 3D map and static dossier are illustrative.
+
+Deploy `apps/paper` and `apps/video` from the same reviewed Git revision. Set Paper `VITE_VIDEO_ORIGIN` and Video `VITE_PAPER_ORIGIN` to the canonical independent production URLs, then redeploy both. These values are public origins, not secrets. Do not connect either publisher to an unreviewed account's origin by fallback.

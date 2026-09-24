@@ -1,5 +1,6 @@
 {
   "outputDirectory": "dist",
-  "buildCommand": "npm run build:paper",
+  "buildCommand": "cd ../.. && npm run build:paper",
+  "installCommand": "cd ../.. && npm ci",
   "framework": "vite"
 }
